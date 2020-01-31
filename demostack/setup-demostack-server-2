@@ -1,0 +1,84 @@
+#!/bin/bash -l
+################################################################
+######## Consul
+################################################################
+cat <<-EOF > /etc/consul.d/demostack.hcl
+{
+  "datacenter": "dc1",
+  "primary_datacenter": "dc1",
+  "data_dir": "/mnt/consul",
+  "leave_on_terminate": true,
+  "node_name": "demostack-2",
+  "bind_addr": "0.0.0.0",
+  "client_addr": "0.0.0.0",
+  "bootstrap_expect" : 3
+   "retry_join" : ["demostack-server-1","demostack-server-3"]
+  "server": true,
+  "ports": {
+    "http": 8500,
+    "https": 8501,
+    "grpc": 8502
+  },
+  "connect":{
+    "enabled": true
+  },
+  "ui": true,
+  "enable_central_service_config":true,
+  "autopilot": {
+    "cleanup_dead_servers": true,
+    "last_contact_threshold": "200ms",
+    "max_trailing_logs": 250,
+    "server_stabilization_time": "10s",
+    "disable_upgrade_migration": false
+  },
+  "telemetry": {
+    "disable_hostname": true,
+    "prometheus_retention_time": "30s"
+  }
+}
+EOF
+####
+
+echo "--> Writing profile"
+sudo tee /etc/profile.d/consul.sh > /dev/null <<"EOF"
+alias conslu="consul"
+alias ocnsul="consul"
+EOF
+source /etc/profile.d/consul.sh
+
+echo "--> Generating systemd configuration"
+sudo tee /etc/systemd/system/consul.service > /dev/null <<"EOF"
+[Unit]
+Description=Consul
+Documentation=https://www.consul.io/docs/
+Requires=network-online.target
+After=network-online.target
+
+[Service]
+Restart=on-failure
+ExecStart=/usr/local/bin/consul agent -config-dir="/etc/consul.d"
+ExecReload=/bin/kill -HUP $MAINPID
+KillSignal=SIGINT
+
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo systemctl enable consul
+sudo systemctl restart consul
+
+echo "--> Waiting for all Consul servers"
+while [ "$(consul members 2>&1 | grep "server" | grep "alive" | wc -l)" -lt "${consul_servers}" ]; do
+  sleep 3
+done
+
+echo "--> Waiting for Consul leader"
+while [ -z "$(curl -s http://127.0.0.1:8500/v1/status/leader)" ]; do
+  sleep 3
+done
+
+################################################################
+
+
+
+
+exit 0
