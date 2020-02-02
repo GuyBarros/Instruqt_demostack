@@ -2,17 +2,34 @@
 ################################################################
 ######## Consul
 ################################################################
+
+echo "--> Adding helper for IP retrieval"
+sudo tee /etc/profile.d/ips.sh > /dev/null <<EOF
+function private_ip {
+  curl -H "Metadata-Flavor: Google" -s http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/ip
+}
+function public_ip {
+  curl -H "Metadata-Flavor: Google" http://metadata/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip
+}
+EOF
+source /etc/profile.d/ips.sh
+
+
+
+
 cat <<-EOF > /etc/consul.d/demostack.hcl
 {
   "datacenter": "dc1",
-  "primary_datacenter":  "dc1",
+  "primary_datacenter": "dc1",
   "data_dir": "/mnt/consul",
   "leave_on_terminate": true,
-  "node_name": "server-3",
+  "node_name": "demostack-3",
+  "advertise_addr": "$(private_ip)",
+  "advertise_addr_wan": "$(public_ip)",
   "bind_addr": "0.0.0.0",
   "client_addr": "0.0.0.0",
-  "bootstrap_expect" : 3
-  "retry_join" : ["demostack-server-2","demostack-server-1"]
+  "bootstrap_expect" : 3,
+   "retry_join" : ["demostack-server-2","demostack-server-1"],
   "server": true,
   "ports": {
     "http": 8500,
@@ -66,19 +83,133 @@ EOF
 sudo systemctl enable consul
 sudo systemctl restart consul
 
-echo "--> Waiting for all Consul servers"
-while [ "$(consul members 2>&1 | grep "server" | grep "alive" | wc -l)" -lt "${consul_servers}" ]; do
-  sleep 3
-done
-
-echo "--> Waiting for Consul leader"
-while [ -z "$(curl -s http://127.0.0.1:8500/v1/status/leader)" ]; do
-  sleep 3
-done
-
+################################################################
+######## Nomad
 ################################################################
 
+echo "--> Create a Directory to Use as a Mount Target"
+sudo mkdir -p /opt/mysql/data/
+sudo mkdir -p /opt/mongodb/data/
+sudo mkdir -p /opt/prometheus/data/
 
+echo "--> Installing CNI plugin"
+sudo mkdir -p /opt/cni/bin/
+wget -O cni.tgz ${cni_plugin_url}
+sudo tar -xzf cni.tgz -C /opt/cni/bin/
 
+echo "--> Writing configuration"
+sudo mkdir -p /mnt/nomad
+sudo mkdir -p /etc/nomad.d
+
+# Write Server main config file
+sudo tee /etc/nomad.d/config.hcl > /dev/null <<EOF
+name         = "demostack-3"
+data_dir     = "/mnt/nomad"
+enable_debug = true
+bind_addr = "0.0.0.0"
+datacenter = "dc1"
+region = "global"
+server {
+  enabled          = true
+  bootstrap_expect = 3
+}
+client {
+  enabled = true
+   options {
+    "driver.raw_exec.enable" = "1"
+     "docker.privileged.enabled" = "true"
+  }
+  meta {
+    "type" = "server",
+    "name" = "nomad-server-1"
+  }
+  host_volume "mysql_mount" {
+    path      = "/opt/mysql/data/"
+    read_only = false
+  }
+  host_volume "mongodb_mount" {
+    path      = "/opt/mongodb/data/"
+    read_only = false
+  }
+  host_volume "prometheus_mount" {
+    path      = "/opt/prometheus/data/"
+    read_only = false
+  }
+}
+consul {
+    address = "localhost:8500"
+    server_service_name = "nomad-server"
+    client_service_name = "nomad-client"
+    auto_advertise = true
+    server_auto_join = true
+    client_auto_join = true
+}
+autopilot {
+    cleanup_dead_servers = true
+    last_contact_threshold = "200ms"
+    max_trailing_logs = 250
+    server_stabilization_time = "10s"
+    enable_redundancy_zones = false
+    disable_upgrade_migration = false
+    enable_custom_upgrades = false
+}
+telemetry {
+  publish_allocation_metrics = true
+  publish_node_metrics = true
+  prometheus_metrics = true
+}
+EOF
+
+# Create a syslog config file
+cat <<-EOF > /etc/rsyslog.d/30-nomad.conf
+if \$programname == 'nomad' or \$syslogtag == 'nomad' then /var/log/nomad/nomad.log
+& stop
+EOF
+
+#restart syslog
+systemctl restart rsyslog
+
+# Setup Nomad for systemctl
+cat <<-EOF > /etc/systemd/system/nomad.service
+[Unit]
+Description=Nomad
+Documentation=https://nomadproject.io/docs/
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+ExecReload=/bin/kill -HUP $MAINPID
+ExecStart=/usr/local/bin/nomad agent -config /etc/nomad.d
+KillMode=process
+KillSignal=SIGINT
+LimitNOFILE=infinity
+LimitNPROC=infinity
+Restart=on-failure
+RestartSec=2
+StartLimitBurst=3
+TasksMax=infinity
+
+# make sure log directory exists and owned by syslog
+PermissionsStartOnly=true
+ExecStartPre=/bin/mkdir -p /var/log/nomad
+ExecStartPre=/usr/bin/touch /var/log/nomad/nomad.log
+ExecStartPre=/bin/chown -R syslog:adm /var/log/nomad
+ExecStartPre=/bin/chmod -R 755 /var/log/nomad
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=nomad
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Enable the service
+systemctl enable nomad
+systemctl start nomad
+
+# Configure Nomad Autocomplete
+nomad -autocomplete-install
+complete -C /usr/local/bin/nomad nomad
+################################################################
 
 exit 0
