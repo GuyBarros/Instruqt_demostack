@@ -1,7 +1,18 @@
 #!/bin/bash -l
 ################################################################
-######## Consul
+######## Base
 ################################################################
+
+function install_from_url {
+  cd /tmp && {
+    curl -sfLo "$${1}.zip" "$${2}"
+    unzip -qq "$${1}.zip"
+    sudo mv "$${1}" "/usr/local/bin/$${1}"
+    sudo chmod +x "/usr/local/bin/$${1}"
+    rm -rf "$${1}.zip"
+  }
+}
+
 
 echo "--> Adding helper for IP retrieval"
 sudo tee /etc/profile.d/ips.sh > /dev/null <<EOF
@@ -15,6 +26,25 @@ EOF
 source /etc/profile.d/ips.sh
 
 
+################################################################
+######## Consul
+################################################################
+
+
+echo "--> Installing dnsmasq"
+sudo apt-get install -y -q dnsmasq
+
+echo "--> Configuring DNSmasq"
+sudo bash -c "cat >/etc/dnsmasq.d/10-consul" << EOF
+server=/consul/127.0.0.1#8600
+no-poll
+server=8.8.8.8
+server=8.8.4.4
+cache-size=0
+EOF
+
+sudo systemctl enable dnsmasq
+sudo systemctl restart dnsmasq
 
 
 cat <<-EOF > /etc/consul.d/demostack.hcl
@@ -95,6 +125,11 @@ sudo systemctl restart consul
 ######## Nomad
 ################################################################
 
+#echo "--> Fetching"
+#install_from_url "nomad" "https://releases.hashicorp.com/nomad/0.10.3/nomad_0.10.3_linux_amd64.zip"
+#sleep 10
+
+
 echo "--> Create a Directory to Use as a Mount Target"
 sudo mkdir -p /opt/mysql/data/
 sudo mkdir -p /opt/mongodb/data/
@@ -102,7 +137,7 @@ sudo mkdir -p /opt/prometheus/data/
 
 echo "--> Installing CNI plugin"
 sudo mkdir -p /opt/cni/bin/
-wget -O cni.tgz ${cni_plugin_url}
+wget -O cni.tgz https://github.com/containernetworking/plugins/releases/download/v0.8.5/cni-plugins-linux-amd64-v0.8.5.tgz
 sudo tar -xzf cni.tgz -C /opt/cni/bin/
 
 echo "--> Writing configuration"
@@ -220,5 +255,6 @@ nomad -autocomplete-install
 complete -C /usr/local/bin/nomad nomad
 
 ###############################################################
+echo "--> Finished script"
 
 exit 0
