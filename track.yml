@@ -16,9 +16,10 @@ tags:
 - Vault
 owner: hashicorp
 developers:
+- guy@hashicorp.com
 - andre@hashicorp.com
 - ricardo@hashicorp.com
-- guy@hashicorp.com
+- lhaig@hashicorp.com
 private: true
 published: false
 challenges:
@@ -57,6 +58,10 @@ challenges:
     hostname: demostack-server-1
     path: /hashibo
     port: 9999
+  - title: Vault UI
+    type: service
+    hostname: demostack-server-3
+    port: 8200
   difficulty: basic
   timelimit: 1800
-checksum: "8649431871102887929"
+checksum: "7622785624963975192"

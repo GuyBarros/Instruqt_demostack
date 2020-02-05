@@ -125,11 +125,56 @@ WantedBy=multi-user.target
 EOF
 sudo systemctl enable consul
 sudo systemctl restart consul
+################################################################
+######## Vault
+################################################################
+
+echo "--> Writing configuration"
+sudo mkdir -p /etc/vault.d
+sudo tee /etc/vault.d/config.hcl > /dev/null <<EOF
+cluster_name = "demostack"
+storage "consul" {
+  path = "vault/"
+}
+listener "tcp" {
+  address       = "0.0.0.0:8200"
+  tls_disable = true
+}
+
+api_addr = "https://$(public_ip):8200"
+disable_mlock = true
+ui = true
+EOF
+
+echo "--> Writing profile"
+sudo tee /etc/profile.d/vault.sh > /dev/null <<"EOF"
+alias vualt="vault"
+# export VAULT_ADDR="http://active.vault.service.consul:8200"
+export VAULT_ADDR="http://127.0.0.1:8200"
+EOF
+source /etc/profile.d/vault.sh
+
+echo "--> Generating systemd configuration"
+sudo tee /etc/systemd/system/vault.service > /dev/null <<"EOF"
+[Unit]
+Description=Vault
+Documentation=https://www.vaultproject.io/docs/
+Requires=network-online.target
+After=network-online.target
+[Service]
+Restart=on-failure
+ExecStart=/usr/local/bin/vault server -config="/etc/vault.d/config.hcl"
+ExecReload=/bin/kill -HUP $MAINPID
+KillSignal=SIGINT
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo systemctl enable vault
+sudo systemctl start vault
 
 ################################################################
 ######## Nomad
 ################################################################
-
 
 #echo "--> Fetching"
 #install_from_url "nomad" "https://releases.hashicorp.com/nomad/0.10.3/nomad_0.10.3_linux_amd64.zip"
