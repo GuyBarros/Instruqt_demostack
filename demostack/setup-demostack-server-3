@@ -2,6 +2,15 @@
 ################################################################
 ######## Base
 ################################################################
+export HOSTNAME=demostack-server-3.node.consul
+export NODE_NAME=demostack-3
+export THIS_SERVER=demostack-server-3
+export JOIN_SERVER1=demostack-server-1
+export JOIN_SERVER2=demostack-server-2
+export DATACENTER=dc1
+export PRIMARY_DATACENTER=dc1
+export VAULT_CLUSTER_NAME=demostack
+
 
 echo "==> libc6 issue workaround"
 echo 'libc6 libraries/restart-without-asking boolean true' | sudo debconf-set-selections
@@ -41,14 +50,14 @@ source /etc/profile.d/ips.sh
 
 
 echo "--> Setting hostname..."
-echo "demostack-server-3.node.consul" | sudo tee /etc/hostname
+echo $HOSTNAME | sudo tee /etc/hostname
 sudo hostname -F /etc/hostname
 
 echo "--> Adding hostname to /etc/hosts"
 sudo tee -a /etc/hosts > /dev/null <<EOF
 
 # For local resolution
-$(private_ip)  demostack-server-3.node.consul
+$(private_ip)  $(echo $HOSTNAME)
 EOF
 
 echo "--> Installing dnsmasq"
@@ -69,35 +78,24 @@ sudo apt-get update && sudo apt-get install -y getenvoy-envoy
 envoy --version
 
 
-
 ################################################################
 ######## Consul
 ################################################################
 
-echo "--> Adding helper for IP retrieval"
-sudo tee /etc/profile.d/ips.sh > /dev/null <<EOF
-function private_ip {
-  curl -H "Metadata-Flavor: Google" -s http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/ip
-}
-function public_ip {
-  curl -H "Metadata-Flavor: Google" http://metadata/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip
-}
-EOF
-source /etc/profile.d/ips.sh
 
 cat <<-EOF > /etc/consul.d/demostack.hcl
 {
-  "datacenter": "dc1",
-  "primary_datacenter": "dc1",
+  "datacenter": "$(echo $DATACENTER)",
+  "primary_datacenter": "$(echo $PRIMARY_DATACENTER)",
   "data_dir": "/mnt/consul",
   "leave_on_terminate": true,
-  "node_name": "demostack-3",
+  "node_name": "$(echo $NODE_NAME)",
   "advertise_addr": "$(private_ip)",
   "advertise_addr_wan": "$(public_ip)",
   "bind_addr": "0.0.0.0",
   "client_addr": "0.0.0.0",
   "bootstrap_expect" : 3,
-   "retry_join" : ["demostack-server-2","demostack-server-1"],
+   "retry_join" : ["$(echo $JOIN_SERVER1)","$(echo $JOIN_SERVER2)"],
   "server": true,
   "ports": {
     "http": 8500,
@@ -122,6 +120,7 @@ cat <<-EOF > /etc/consul.d/demostack.hcl
   }
 }
 EOF
+####
 
 echo "--> Writing profile"
 sudo tee /etc/profile.d/consul.sh > /dev/null <<"EOF"
@@ -166,6 +165,8 @@ EOF
 sudo systemctl enable dnsmasq
 sudo systemctl restart dnsmasq
 
+
+
 ################################################################
 ######## Vault
 ################################################################
@@ -173,7 +174,7 @@ sudo systemctl restart dnsmasq
 echo "--> Writing configuration"
 sudo mkdir -p /etc/vault.d
 sudo tee /etc/vault.d/config.hcl > /dev/null <<EOF
-cluster_name = "demostack"
+cluster_name = "$(echo $VAULT_CLUSTER_NAME)"
 storage "consul" {
   path = "vault/"
 }
@@ -213,6 +214,7 @@ EOF
 sudo systemctl enable vault
 sudo systemctl start vault
 
+
 echo "--> Initializing vault"
  consul lock tmp/vault/lock "$(cat <<"EOF"
  set -e
@@ -226,7 +228,6 @@ echo "--> Initializing vault"
   cat /tmp/out.txt | grep "Unseal Key 1" | sed 's/Unseal Key 1: //' | consul kv put service/vault/unseal-key -
  export VAULT_TOKEN=$(consul kv get service/vault/root-token)
  echo "ROOT TOKEN: $VAULT_TOKEN"
-
 sudo systemctl enable vault
 sudo systemctl restart vault
 else
@@ -282,36 +283,27 @@ echo "--> Attempting to create nomad role"
   path "kv/*" {
     capabilities = ["create", "read", "update", "delete", "list"]
 }
-
 path "pki/*" {
     capabilities = ["create", "read", "update", "delete", "list", "sudo"]
 }
-
 EOR
 
   vault policy write test - <<EOR
   path "kv/*" {
     capabilities = ["list"]
 }
-
 path "kv/test" {
     capabilities = ["create", "read", "update", "delete", "list", "sudo"]
 }
-
 path "kv/data/test" {
     capabilities = ["create", "read", "update", "delete", "list", "sudo"]
 }
-
 path "pki/*" {
     capabilities = ["create", "read", "update", "delete", "list", "sudo"]
 }
-
-
 path "kv/metadata/cgtest" {
     capabilities = ["list"]
 }
-
-
 path "kv/data/cgtest" {
     capabilities = ["create", "read", "update", "delete", "list", "sudo"]
     control_group = {
@@ -323,7 +315,6 @@ path "kv/data/cgtest" {
         }
     }
 }
-
 EOR
 
 
@@ -375,29 +366,22 @@ vault policy write superuser - <<EOR
 path "*" {
   capabilities = ["create", "read", "update", "delete", "list", "sudo"]
   }
-
   path "kv/*" {
     capabilities = ["create", "read", "update", "delete", "list", "sudo"]
 }
-
 path "kv/test/*" {
     capabilities = ["create", "read", "update", "delete", "list", "sudo"]
 }
-
 path "pki/*" {
     capabilities = ["create", "read", "update", "delete", "list", "sudo"]
 }
-
 path "sys/control-group/authorize" {
     capabilities = ["create", "update"]
 }
-
 # To check control group request status
 path "sys/control-group/request" {
     capabilities = ["create", "update"]
 }
-
-
 EOR
 } ||
 {
@@ -438,6 +422,7 @@ echo "--> Setting up Github auth"
 
 echo "==> Vault is done!"
 
+
 ################################################################
 ######## Nomad
 ################################################################
@@ -445,17 +430,6 @@ echo "==> Vault is done!"
 #echo "--> Fetching"
 #install_from_url "nomad" "https://releases.hashicorp.com/nomad/0.10.3/nomad_0.10.3_linux_amd64.zip"
 #sleep 10
-
-echo "--> Generating Vault token..."
-export VAULT_TOKEN="$(consul kv get service/vault/root-token)"
-  NOMAD_VAULT_TOKEN="$(VAULT_TOKEN="$VAULT_TOKEN" \
-  VAULT_ADDR="http://localhost:8200" \
-  VAULT_SKIP_VERIFY=true \
-  vault token create -field=token -policy=superuser -policy=nomad-server -display-name=demostack-3 -id=demostack-3 -period=72h)"
-
-consul kv put service/vault/demostack-3-token $NOMAD_VAULT_TOKEN
-
-vault token create -field=token -policy=root -display-name=root -id=root
 
 
 echo "--> Create a Directory to Use as a Mount Target"
@@ -474,11 +448,11 @@ sudo mkdir -p /etc/nomad.d
 
 # Write Server main config file
 sudo tee /etc/nomad.d/config.hcl > /dev/null <<EOF
-name         = "demostack-3"
+name         = "$(echo $NODE_NAME)"
 data_dir     = "/mnt/nomad"
 enable_debug = true
 bind_addr = "0.0.0.0"
-datacenter = "dc1"
+datacenter = "$(echo $DATACENTER)"
 region = "global"
 server {
   enabled          = true
@@ -492,7 +466,7 @@ client {
   }
   meta {
     "type" = "server",
-    "name" = "nomad-server-1"
+    "name" = "$(echo $NODE_NAME)"
   }
   host_volume "mysql_mount" {
     path      = "/opt/mysql/data/"
@@ -581,6 +555,9 @@ systemctl start nomad
 # Configure Nomad Autocomplete
 nomad -autocomplete-install
 complete -C /usr/local/bin/nomad nomad
+
+###############################################################
+
 ################################################################
 #### Run Nomad Jobs
 ################################################################
@@ -595,6 +572,10 @@ nomad run /demostack/fabio-lb.nomad
 
 echo "--> not running Nomad Jobs"
 nomad run /demostack/hashibo.nomad
+
+echo "--> Finished script"
+
+exit 0
 
 echo "--> Finished script"
 

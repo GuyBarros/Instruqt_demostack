@@ -2,6 +2,15 @@
 ################################################################
 ######## Base
 ################################################################
+export HOSTNAME=demostack-server-1.node.consul
+export NODE_NAME=demostack-1
+export THIS_SERVER=demostack-server-1
+export JOIN_SERVER1=demostack-server-2
+export JOIN_SERVER2=demostack-server-3
+export DATACENTER=dc1
+export PRIMARY_DATACENTER=dc1
+export VAULT_CLUSTER_NAME=demostack
+
 
 echo "==> libc6 issue workaround"
 echo 'libc6 libraries/restart-without-asking boolean true' | sudo debconf-set-selections
@@ -41,14 +50,14 @@ source /etc/profile.d/ips.sh
 
 
 echo "--> Setting hostname..."
-echo "demostack-server-1.node.consul" | sudo tee /etc/hostname
+echo $HOSTNAME | sudo tee /etc/hostname
 sudo hostname -F /etc/hostname
 
 echo "--> Adding hostname to /etc/hosts"
 sudo tee -a /etc/hosts > /dev/null <<EOF
 
 # For local resolution
-$(private_ip)  demostack-server-1.node.consul
+$(private_ip)  $(echo $HOSTNAME)
 EOF
 
 echo "--> Installing dnsmasq"
@@ -76,17 +85,17 @@ envoy --version
 
 cat <<-EOF > /etc/consul.d/demostack.hcl
 {
-  "datacenter": "dc1",
-  "primary_datacenter": "dc1",
+  "datacenter": "$(echo $DATACENTER)",
+  "primary_datacenter": "$(echo $PRIMARY_DATACENTER)",
   "data_dir": "/mnt/consul",
   "leave_on_terminate": true,
-  "node_name": "demostack-1",
+  "node_name": "$(echo $NODE_NAME)",
   "advertise_addr": "$(private_ip)",
   "advertise_addr_wan": "$(public_ip)",
   "bind_addr": "0.0.0.0",
   "client_addr": "0.0.0.0",
   "bootstrap_expect" : 3,
-   "retry_join" : ["demostack-server-2","demostack-server-3"],
+   "retry_join" : ["$(echo $JOIN_SERVER1)","$(echo $JOIN_SERVER2)"],
   "server": true,
   "ports": {
     "http": 8500,
@@ -165,7 +174,7 @@ sudo systemctl restart dnsmasq
 echo "--> Writing configuration"
 sudo mkdir -p /etc/vault.d
 sudo tee /etc/vault.d/config.hcl > /dev/null <<EOF
-cluster_name = "demostack"
+cluster_name = "$(echo $VAULT_CLUSTER_NAME)"
 storage "consul" {
   path = "vault/"
 }
@@ -230,11 +239,11 @@ sudo mkdir -p /etc/nomad.d
 
 # Write Server main config file
 sudo tee /etc/nomad.d/config.hcl > /dev/null <<EOF
-name         = "demostack-1"
+name         = "$(echo $NODE_NAME)"
 data_dir     = "/mnt/nomad"
 enable_debug = true
 bind_addr = "0.0.0.0"
-datacenter = "dc1"
+datacenter = "$(echo $DATACENTER)"
 region = "global"
 server {
   enabled          = true
@@ -248,7 +257,7 @@ client {
   }
   meta {
     "type" = "server",
-    "name" = "nomad-server-1"
+    "name" = "$(echo $NODE_NAME)"
   }
   host_volume "mysql_mount" {
     path      = "/opt/mysql/data/"
