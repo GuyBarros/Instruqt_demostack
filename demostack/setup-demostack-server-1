@@ -1,0 +1,353 @@
+#!/bin/bash -l
+################################################################
+######## Base
+################################################################
+export HOSTNAME=demostack-server-1.node.consul
+export NODE_NAME=demostack-1
+export THIS_SERVER=demostack-server-1
+export JOIN_SERVER1=demostack-server-2
+export JOIN_SERVER2=demostack-server-3
+export DATACENTER=dc1
+export PRIMARY_DATACENTER=dc1
+export VAULT_CLUSTER_NAME=demostack
+
+
+echo "==> libc6 issue workaround"
+echo 'libc6 libraries/restart-without-asking boolean true' | sudo debconf-set-selections
+
+function ssh-apt {
+  sudo DEBIAN_FRONTEND=noninteractive apt-get -yqq \
+    --allow-downgrades \
+    --allow-remove-essential \
+    --allow-change-held-packages \
+    -o Dpkg::Use-Pty=0 \
+    -o Dpkg::Options::="--force-confdef" \
+    -o Dpkg::Options::="--force-confold" \
+    "$@"
+}
+
+function install_from_url {
+  cd /tmp && {
+    curl -sfLo "$${1}.zip" "$${2}"
+    unzip -qq "$${1}.zip"
+    sudo mv "$${1}" "/usr/local/bin/$${1}"
+    sudo chmod +x "/usr/local/bin/$${1}"
+    rm -rf "$${1}.zip"
+  }
+}
+
+
+echo "--> Adding helper for IP retrieval"
+sudo tee /etc/profile.d/ips.sh > /dev/null <<EOF
+function private_ip {
+  curl -H "Metadata-Flavor: Google" -s http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/ip
+}
+function public_ip {
+  curl -H "Metadata-Flavor: Google" http://metadata/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip
+}
+EOF
+source /etc/profile.d/ips.sh
+
+
+echo "--> Setting hostname..."
+echo $HOSTNAME | sudo tee /etc/hostname
+sudo hostname -F /etc/hostname
+
+echo "--> Adding hostname to /etc/hosts"
+sudo tee -a /etc/hosts > /dev/null <<EOF
+
+# For local resolution
+$(private_ip)  $(echo $HOSTNAME)
+EOF
+
+echo "--> Installing dnsmasq"
+sudo apt-get install -y -q dnsmasq
+
+echo "--> Configuring DNSmasq"
+sudo bash -c "cat >/etc/dnsmasq.d/10-consul" << EOF
+server=/consul/127.0.0.1#8600
+EOF
+
+echo "--> Install Envoy"
+curl -sL 'https://getenvoy.io/gpg' | sudo apt-key add -
+sudo add-apt-repository \
+"deb [arch=amd64] https://dl.bintray.com/tetrate/getenvoy-deb \
+$(lsb_release -cs) \
+stable"
+sudo apt-get update && sudo apt-get install -y getenvoy-envoy
+envoy --version
+
+
+################################################################
+######## Consul
+################################################################
+
+
+cat <<-EOF > /etc/consul.d/demostack.hcl
+{
+  "datacenter": "$(echo $DATACENTER)",
+  "primary_datacenter": "$(echo $PRIMARY_DATACENTER)",
+  "data_dir": "/mnt/consul",
+  "leave_on_terminate": true,
+  "node_name": "$(echo $NODE_NAME)",
+  "advertise_addr": "$(private_ip)",
+  "advertise_addr_wan": "$(public_ip)",
+  "bind_addr": "0.0.0.0",
+  "client_addr": "0.0.0.0",
+  "bootstrap_expect" : 3,
+   "retry_join" : ["$(echo $JOIN_SERVER1)","$(echo $JOIN_SERVER2)"],
+  "server": true,
+  "ports": {
+    "http": 8500,
+    "https": 8501,
+    "grpc": 8502
+  },
+  "connect":{
+    "enabled": true
+  },
+  "ui": true,
+  "enable_central_service_config":true,
+  "autopilot": {
+    "cleanup_dead_servers": true,
+    "last_contact_threshold": "200ms",
+    "max_trailing_logs": 250,
+    "server_stabilization_time": "10s",
+    "disable_upgrade_migration": false
+  },
+  "telemetry": {
+    "disable_hostname": true,
+    "prometheus_retention_time": "30s"
+  }
+}
+EOF
+####
+
+echo "--> Writing profile"
+sudo tee /etc/profile.d/consul.sh > /dev/null <<"EOF"
+alias conslu="consul"
+alias ocnsul="consul"
+EOF
+source /etc/profile.d/consul.sh
+
+echo "--> Generating systemd configuration"
+sudo tee /etc/systemd/system/consul.service > /dev/null <<"EOF"
+[Unit]
+Description=Consul
+Documentation=https://www.consul.io/docs/
+Requires=network-online.target
+After=network-online.target
+
+[Service]
+Restart=on-failure
+ExecStart=/usr/local/bin/consul agent -config-dir="/etc/consul.d"
+ExecReload=/bin/kill -HUP $MAINPID
+KillSignal=SIGINT
+
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo systemctl enable consul
+sudo systemctl restart consul
+
+
+echo "--> Installing dnsmasq"
+sudo apt-get install -y -q dnsmasq
+
+echo "--> Configuring DNSmasq"
+sudo bash -c "cat >/etc/dnsmasq.d/10-consul" << EOF
+server=/consul/127.0.0.1#8600
+no-poll
+server=8.8.8.8
+server=8.8.4.4
+cache-size=0
+EOF
+
+sudo systemctl enable dnsmasq
+sudo systemctl restart dnsmasq
+
+
+
+################################################################
+######## Vault
+################################################################
+
+echo "--> Writing configuration"
+sudo mkdir -p /etc/vault.d
+sudo tee /etc/vault.d/config.hcl > /dev/null <<EOF
+cluster_name = "$(echo $VAULT_CLUSTER_NAME)"
+storage "consul" {
+  path = "vault/"
+}
+listener "tcp" {
+  address       = "0.0.0.0:8200"
+  tls_disable = true
+}
+
+api_addr = "https://$(public_ip):8200"
+disable_mlock = true
+ui = true
+EOF
+
+echo "--> Writing profile"
+sudo tee /etc/profile.d/vault.sh > /dev/null <<"EOF"
+alias vualt="vault"
+# export VAULT_ADDR="http://active.vault.service.consul:8200"
+export VAULT_ADDR="http://127.0.0.1:8200"
+EOF
+source /etc/profile.d/vault.sh
+
+echo "--> Generating systemd configuration"
+sudo tee /etc/systemd/system/vault.service > /dev/null <<"EOF"
+[Unit]
+Description=Vault
+Documentation=https://www.vaultproject.io/docs/
+Requires=network-online.target
+After=network-online.target
+[Service]
+Restart=on-failure
+ExecStart=/usr/local/bin/vault server -config="/etc/vault.d/config.hcl"
+ExecReload=/bin/kill -HUP $MAINPID
+KillSignal=SIGINT
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo systemctl enable vault
+sudo systemctl start vault
+
+################################################################
+######## Nomad
+################################################################
+
+#echo "--> Fetching"
+#install_from_url "nomad" "https://releases.hashicorp.com/nomad/0.10.3/nomad_0.10.3_linux_amd64.zip"
+#sleep 10
+
+
+echo "--> Create a Directory to Use as a Mount Target"
+sudo mkdir -p /opt/mysql/data/
+sudo mkdir -p /opt/mongodb/data/
+sudo mkdir -p /opt/prometheus/data/
+
+echo "--> Installing CNI plugin"
+sudo mkdir -p /opt/cni/bin/
+wget -O cni.tgz https://github.com/containernetworking/plugins/releases/download/v0.8.5/cni-plugins-linux-amd64-v0.8.5.tgz
+sudo tar -xzf cni.tgz -C /opt/cni/bin/
+
+echo "--> Writing configuration"
+sudo mkdir -p /mnt/nomad
+sudo mkdir -p /etc/nomad.d
+
+# Write Server main config file
+sudo tee /etc/nomad.d/config.hcl > /dev/null <<EOF
+name         = "$(echo $NODE_NAME)"
+data_dir     = "/mnt/nomad"
+enable_debug = true
+bind_addr = "0.0.0.0"
+datacenter = "$(echo $DATACENTER)"
+region = "global"
+server {
+  enabled          = true
+  bootstrap_expect = 3
+}
+client {
+  enabled = true
+   options {
+    "driver.raw_exec.enable" = "1"
+     "docker.privileged.enabled" = "true"
+  }
+  meta {
+    "type" = "server",
+    "name" = "$(echo $NODE_NAME)"
+  }
+  host_volume "mysql_mount" {
+    path      = "/opt/mysql/data/"
+    read_only = false
+  }
+  host_volume "mongodb_mount" {
+    path      = "/opt/mongodb/data/"
+    read_only = false
+  }
+  host_volume "prometheus_mount" {
+    path      = "/opt/prometheus/data/"
+    read_only = false
+  }
+}
+consul {
+    address = "localhost:8500"
+    server_service_name = "nomad-server"
+    client_service_name = "nomad-client"
+    auto_advertise = true
+    server_auto_join = true
+    client_auto_join = true
+}
+autopilot {
+    cleanup_dead_servers = true
+    last_contact_threshold = "200ms"
+    max_trailing_logs = 250
+    server_stabilization_time = "10s"
+    enable_redundancy_zones = false
+    disable_upgrade_migration = false
+    enable_custom_upgrades = false
+}
+telemetry {
+  publish_allocation_metrics = true
+  publish_node_metrics = true
+  prometheus_metrics = true
+}
+EOF
+
+# Create a syslog config file
+cat <<-EOF > /etc/rsyslog.d/30-nomad.conf
+if \$programname == 'nomad' or \$syslogtag == 'nomad' then /var/log/nomad/nomad.log
+& stop
+EOF
+
+#restart syslog
+systemctl restart rsyslog
+
+# Setup Nomad for systemctl
+cat <<-EOF > /etc/systemd/system/nomad.service
+[Unit]
+Description=Nomad
+Documentation=https://nomadproject.io/docs/
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+ExecReload=/bin/kill -HUP $MAINPID
+ExecStart=/usr/local/bin/nomad agent -config /etc/nomad.d
+KillMode=process
+KillSignal=SIGINT
+LimitNOFILE=infinity
+LimitNPROC=infinity
+Restart=on-failure
+RestartSec=2
+StartLimitBurst=3
+TasksMax=infinity
+
+# make sure log directory exists and owned by syslog
+PermissionsStartOnly=true
+ExecStartPre=/bin/mkdir -p /var/log/nomad
+ExecStartPre=/usr/bin/touch /var/log/nomad/nomad.log
+ExecStartPre=/bin/chown -R syslog:adm /var/log/nomad
+ExecStartPre=/bin/chmod -R 755 /var/log/nomad
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=nomad
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Enable the service
+systemctl enable nomad
+systemctl start nomad
+
+# Configure Nomad Autocomplete
+nomad -autocomplete-install
+complete -C /usr/local/bin/nomad nomad
+
+###############################################################
+echo "--> Finished script"
+
+exit 0

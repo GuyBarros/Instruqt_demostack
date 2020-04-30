@@ -1,0 +1,14 @@
+version: "2"
+virtualmachines:
+- name: demostack-server-1
+  image: instruqt-hashicorp/hashistack-0-4-0
+  shell: /bin/bash -l
+  machine_type: n1-standard-1
+- name: demostack-server-2
+  image: instruqt-hashicorp/hashistack-0-4-0
+  shell: /bin/bash -l
+  machine_type: n1-standard-1
+- name: demostack-server-3
+  image: instruqt-hashicorp/hashistack-0-4-0
+  shell: /bin/bash -l
+  machine_type: n1-standard-1

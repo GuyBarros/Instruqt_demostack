@@ -1,0 +1,67 @@
+slug: demostack-first-test
+id: 7dalbtiumqxi
+type: track
+title: Demostack - Yet Another Hashistack demo enviroment
+teaser: a Hashistack enviroment consisting of Consul, Nomad and Vault
+description: |-
+  A long description of the track.
+
+  You can use any GitHub flavoured markdown.
+icon: https://storage.googleapis.com/instruqt-frontend/img/tracks/default.png
+tags:
+- Demostack
+- Hashistack
+- Consul
+- Nomad
+- Vault
+owner: hashicorp
+developers:
+- guy@hashicorp.com
+- andre@hashicorp.com
+- ricardo@hashicorp.com
+- lhaig@hashicorp.com
+private: true
+published: false
+challenges:
+- slug: demostack
+  id: a86pbqs0hxg7
+  type: challenge
+  title: Set up Demostack
+  teaser: run this track to deploy your demo enviroment
+  assignment: |-
+    The assignment the participant needs to complete in order to proceed.
+
+    You can use any GitHub flavoured markdown.
+  notes:
+  - type: text
+    contents: Deploying Demostack
+  tabs:
+  - title: Server 1
+    type: terminal
+    hostname: demostack-server-1
+  - title: Server 2
+    type: terminal
+    hostname: demostack-server-2
+  - title: Server 3
+    type: terminal
+    hostname: demostack-server-3
+  - title: Consul UI
+    type: service
+    hostname: demostack-server-1
+    port: 8500
+  - title: Nomad UI
+    type: service
+    hostname: demostack-server-1
+    port: 4646
+  - title: Hashibo
+    type: service
+    hostname: demostack-server-1
+    path: /hashibo
+    port: 9999
+  - title: Vault UI
+    type: service
+    hostname: demostack-server-3
+    port: 8200
+  difficulty: basic
+  timelimit: 1800
+checksum: "7608955588701943884"
