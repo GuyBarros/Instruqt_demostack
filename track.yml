@@ -16,10 +16,12 @@ tags:
 - Vault
 owner: hashicorp
 developers:
-- guy@hashicorp.com
+- lhaig@hashicorp.com
+- jnyika@hashicorp.com
 - andre@hashicorp.com
 - ricardo@hashicorp.com
-- lhaig@hashicorp.com
+- tharris@hashicorp.com
+- guy@hashicorp.com
 private: true
 published: false
 challenges:
@@ -64,4 +66,4 @@ challenges:
     port: 8200
   difficulty: basic
   timelimit: 1800
-checksum: "7608955588701943884"
+checksum: "11813713112953952185"
